@@ -1,0 +1,32 @@
+# FastAPI and web framework dependencies
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+
+# Image processing
+Pillow
+requests
+
+# AI and ML frameworks
+dspy-ai
+fal-client
+
+# Environment and configuration
+python-dotenv
+
+# Data processing
+pandas
+
+# LangChain and RAG dependencies
+langchain
+langchain-community
+langchain-upstage
+
+# Vector database
+faiss-cpu
+
+# Development and testing (optional)
+pytest
+pytest-asyncio
+httpx
