@@ -1,0 +1,37 @@
+# Environment variables -- this repo's README tells you to create .env HERE,
+# so this line is what stops four live API keys reaching a public remote.
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# FAISS index: rebuilt from app/imagesdata/images_log.csv on first use.
+# Kept out of git so no pickle ships to anyone cloning this repo.
+rag/vectorstore/
+
+# Images the app generates at runtime. The previous repo hit 270MB by committing
+# these; the log CSV below them is the part worth keeping.
+app/imagesdata/*.jpg
+app/imagesdata/*.png
