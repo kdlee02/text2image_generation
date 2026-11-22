@@ -1,5 +1,4 @@
 from services.dspy_optimization import ImageGeneratorService
-#from services.image_generator_service import ImageGeneratorService
 from models.image_manager import ImageManager
 
 class ImageGeneratorRouter:
@@ -11,8 +10,6 @@ class ImageGeneratorRouter:
             return {'error': 'Missing input'}, 400
         try:
             base64_image = self.image_generator.dspy_opt(user_input)
-            #base64_image = dspy_opt(user_input)
-            
             return {'image': base64_image}
         except Exception as e:
             return {'error': str(e)}, 500

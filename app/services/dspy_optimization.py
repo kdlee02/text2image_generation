@@ -1,5 +1,6 @@
 import dspy
 import os
+import sys
 from PIL import Image
 from io import BytesIO
 import requests
@@ -11,6 +12,64 @@ from models.image_manager import ImageManager
 from models.prompt_manager import PromptManager
 load_dotenv()
 
+# Every network read gets a deadline. Without one, a hung fal CDN connection
+# blocks the worker thread forever.
+REQUEST_TIMEOUT = 60
+
+
+def _download_as_base64_jpeg(url):
+    """Fetch an image URL and return it as base64 JPEG."""
+    response = requests.get(url, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    image = Image.open(BytesIO(response.content))
+    # fal returns PNG; saving RGBA (logos, icons) as JPEG raises OSError.
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    buffered = BytesIO()
+    image.save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(APP_DIR)
+IMAGES_LOG = os.path.join(APP_DIR, "imagesdata", "images_log.csv")
+
+# Built once per process from the log as it stands at first use. New rows written
+# during this run are not indexed until restart -- see README.
+_retriever = None
+
+
+def _retrieve_few_shot_examples(query, k=3):
+    """Prompts that previously scored well, as guidance for the evaluator.
+
+    Best-effort by design: a missing Upstage key, an unbuilt index or an empty
+    corpus must degrade to no examples, never break image generation.
+    """
+    global _retriever
+    try:
+        if _retriever is None:
+            if REPO_ROOT not in sys.path:
+                sys.path.insert(0, REPO_ROOT)
+            from rag.document_processor import DocumentProcessor
+
+            _retriever = DocumentProcessor()
+            _retriever.process_document(IMAGES_LOG)
+        prompts = _retriever.retrieve_prompts(query, k=k)
+        if not prompts:
+            return ""
+        return "\n\n".join(f"Example {i}: {p}" for i, p in enumerate(prompts, 1))
+    except Exception as e:
+        print(f"[rag] few-shot retrieval unavailable ({e}); continuing without examples")
+        return ""
+
+
+def _score(result):
+    """overall_score is LLM output and may not parse as an int."""
+    try:
+        return int(float(result.overall_score))
+    except (TypeError, ValueError, AttributeError):
+        return -1
+
 class ImageEvaluationSignature(dspy.Signature):
     """
     You are an expert art critic and image generation specialist tasked with evaluating generated images against their intended prompts.
@@ -18,7 +77,7 @@ class ImageEvaluationSignature(dspy.Signature):
     YOUR EVALUATION PROCESS:
     1. Carefully examine the generated image and compare it to the desired_prompt
     2. Break down your analysis into distinct components: subject, art type, art style, and art movement
-    3. Review previous_attempts to avoid repeating unsuccessful approaches
+    3. Review previous_attempts to avoid repeating unsuccessful approaches, and few_shot_examples for how effective prompts are phrased
     4. Identify any conflicting or contradictory visual elements
     5. Provide specific, actionable feedback for each component
     6. Generate a revised prompt that directly addresses identified issues
@@ -30,6 +89,7 @@ class ImageEvaluationSignature(dspy.Signature):
     current_image: dspy.Image = dspy.InputField(desc="The generated image to evaluate")
     current_prompt: str = dspy.InputField(desc="The prompt used to generate this image")
     previous_attempts: str = dspy.InputField(desc="History of previous attempts and feedback")
+    few_shot_examples: str = dspy.InputField(desc="Prompts that previously scored highly after revision. Use them as guidance for how to phrase an effective revised_prompt, not as content to copy. May be empty.")
     
     reasoning: str = dspy.OutputField(desc="Step-by-step analysis of the image")
     overall_prompt_match: bool = dspy.OutputField(desc="Does the image match the overall intent?")
@@ -75,16 +135,26 @@ class ImageGeneratorService:
         return dspy.Image.from_url(url), url, result["images"][0]
 
     def dspy_opt(self, user_input):
-        user_input = PromptManager.format_prompt(user_input)
-        initial_prompt = user_input
+        # Keep the raw input: it is what gets logged as original_user_prompt and
+        # what the retriever should match on. This used to be rebound to the
+        # formatted prompt, so the log recorded the template output as the "original".
+        original_user_prompt = user_input
+        initial_prompt = PromptManager.format_prompt(user_input)
         current_prompt = initial_prompt
+
+        few_shot_examples = _retrieve_few_shot_examples(original_user_prompt)
 
         check_and_revise_prompt = dspy.ChainOfThought(ImageEvaluationSignature)
 
         history = []
 
         url = ''
-        
+        # The loop used to return whichever image came last. Measured over 74 logged
+        # runs, that returned a worse image than one already generated in 11 of the
+        # 15 runs that exhausted all 5 iterations.
+        best_score = float('-inf')
+        best_url = ''
+
         for i in range(5):
             current_image, url, image_data = self.generate_image(current_prompt)
             #display_image(current_image)
@@ -108,11 +178,16 @@ class ImageGeneratorService:
                 desired_prompt=initial_prompt, 
                 current_image=current_image, 
                 current_prompt=current_prompt,
-                previous_attempts=history_str
+                previous_attempts=history_str,
+                few_shot_examples=few_shot_examples
             )
+
+            score = _score(result)
+            if score > best_score:
+                best_score, best_url = score, url
             
             # Log image with DSPy evaluation data
-            self.image_manager.add_image(current_prompt, image_data, result, user_input)
+            self.image_manager.add_image(current_prompt, image_data, result, original_user_prompt)
             # Store this attempt
             history.append({
                 'prompt': current_prompt,
@@ -135,12 +210,7 @@ class ImageGeneratorService:
                 print(f"Overall Prompt - {result.overall_prompt_match_feedback}")
                 print(f"Confliction - {result.conflict_description}")
                 print(f"Overall Score: {result.overall_score}")
-                response = requests.get(url)
-                response.raise_for_status()
-                image = Image.open(BytesIO(response.content))
-                buffered = BytesIO()
-                image.save(buffered, format="JPEG")
-                return base64.b64encode(buffered.getvalue()).decode("utf-8")
+                return _download_as_base64_jpeg(url)
             else:
                 print(f"Subject Match: {'✓' if result.subject_match else '✗'} - {result.subject_feedback}")
                 print(f"Art Type Match: {'✓' if result.art_type_match else '✗'} - {result.art_type_feedback}")
@@ -151,13 +221,10 @@ class ImageGeneratorService:
                 print(f"\nRevised prompt: {result.revised_prompt}")
                 print(f"Overall Score: {result.overall_score}")
                 current_prompt = result.revised_prompt
-                
-        response = requests.get(url)
-        response.raise_for_status()
-        image = Image.open(BytesIO(response.content))
-        buffered = BytesIO()
-        image.save(buffered, format="JPEG")
-        return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        print(f"\nNo iteration passed every check. "
+              f"Returning the best-scoring attempt (score {best_score} of 10).")
+        return _download_as_base64_jpeg(best_url or url)
     
     def get_all_images(self):
         return self.image_manager.get_images()

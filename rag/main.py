@@ -1,44 +1,22 @@
-from rag_chatbot import RAGChatbot
+"""Inspect what the RAG layer would feed the evaluator for a given prompt.
+
+The app calls this retrieval automatically; this script is just for eyeballing it.
+"""
 import os
 
-# Initialize the RAG chatbot
-chatbot = RAGChatbot()
-chatbot.reset_all()
+from document_processor import DocumentProcessor
 
-base_dir = os.path.dirname(os.path.abspath(__file__))
-imagesdata_dir = os.path.join(base_dir, "..", "app", "imagesdata")
-data_directory = os.path.abspath(imagesdata_dir)
+IMAGES_LOG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "app", "imagesdata", "images_log.csv",
+)
 
-# Define a query to extract information from each document
-query = input("Enter Prompt: ")
+if __name__ == "__main__":
+    processor = DocumentProcessor()
+    # Build only if absent. The old version called reset_all() unconditionally,
+    # which deleted the index and re-paid for embedding on every single run.
+    processor.process_document(IMAGES_LOG)
 
-chatbot.upload_document(f'{data_directory}/images_log.csv')
-response = chatbot.send_message(query)
-
-enhanced_prompt = f"""
-You are an expert art critic and image generation specialist tasked with evaluating generated images against their intended prompts.
-
-YOUR EVALUATION PROCESS:
-1. Carefully examine the generated image and compare it to the desired_prompt
-2. Break down your analysis into distinct components: subject, art type, art style, and art movement
-3. Review previous_attempts to avoid repeating unsuccessful approaches
-4. Identify any conflicting or contradictory visual elements
-5. Provide specific, actionable feedback for each component
-6. Generate a revised prompt that directly addresses identified issues
-
-SCORING (1-10):
-- 10: Perfect match on all components, no issues
-- 8-9: Excellent match with minor imperfections
-- 6-7: Good match but missing some key elements
-- 4-5: Partial match with significant issues
-- 2-3: Poor match, major components incorrect
-- 1: Complete mismatch
-
-Provide thorough reasoning before making judgments. Be honest and constructive in your evaluation.
-
-FEW-SHOT PROMPT EXAMPLES:
-
-{response}
-"""
-
-print(enhanced_prompt)
+    query = input("Enter Prompt: ")
+    for i, prompt in enumerate(processor.retrieve_prompts(query), 1):
+        print(f"\n--- Example {i} ---\n{prompt}")

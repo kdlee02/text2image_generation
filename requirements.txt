@@ -1,32 +1,40 @@
+# Pinned 2026-09-03. Every version below was resolved and import-verified together.
+# Unpinned, this file broke silently over 11 months: LangChain went 0.3 -> 1.x and
+# removed the legacy `langchain.schema` / `langchain.prompts` / `langchain.text_splitter`
+# shims the RAG module imported. Keep the pins.
+
 # FastAPI and web framework dependencies
-fastapi
-uvicorn[standard]
-jinja2
-python-multipart
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+jinja2==3.1.6
+python-multipart==0.0.32
 
 # Image processing
-Pillow
-requests
+Pillow==12.3.0
+requests==2.34.2
 
 # AI and ML frameworks
-dspy-ai
-fal-client
+# NOTE: `dspy-ai` is the deprecated alias for this same package; use `dspy`.
+dspy==3.3.1
+fal-client==1.0.1
 
 # Environment and configuration
-python-dotenv
+python-dotenv==1.2.3
 
 # Data processing
-pandas
+pandas==3.0.5
 
-# LangChain and RAG dependencies
-langchain
-langchain-community
-langchain-upstage
+# RAG dependencies
+# NOTE: langchain-community is being sunset upstream. It works today and is pinned,
+# but expect to migrate FAISS off it eventually. See rag/document_processor.py.
+langchain-core==1.6.1
+langchain-community==0.4.2
+langchain-upstage==0.7.7
 
 # Vector database
-faiss-cpu
+faiss-cpu==1.15.0
 
-# Development and testing (optional)
-pytest
-pytest-asyncio
-httpx
+# Development and testing
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1

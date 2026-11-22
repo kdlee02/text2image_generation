@@ -82,7 +82,7 @@ class FALExperimentGenerator:
                 filename = f"{model_name}_{timestamp}.jpg"
                 filepath = save_path / filename
                 
-                response = requests.get(image_url, stream=True)
+                response = requests.get(image_url, stream=True, timeout=60)
                 response.raise_for_status()
                 
                 with open(filepath, 'wb') as f:

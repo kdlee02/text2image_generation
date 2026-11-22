@@ -1,104 +1,93 @@
-from langchain_community.document_loaders import PyPDFLoader, CSVLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_upstage import UpstageEmbeddings
-from langchain_community.vectorstores import FAISS
 import os
+import shutil
+
+import pandas as pd
 from dotenv import load_dotenv
+from langchain_core.documents import Document
+from langchain_community.vectorstores import FAISS
+from langchain_upstage import UpstageEmbeddings
+
 load_dotenv()
 
+# Resolved from this file, not the process working directory: app/ imports this
+# module while running with cwd=app/, and the old "./vectorstore" default created
+# (and deleted) a stray index wherever the process happened to start.
+DEFAULT_PERSIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectorstore")
+
+# A prompt is worth showing the evaluator only if it scored well AND the loop had
+# actually rewritten it — those are the examples of a *good revision*.
+MIN_SCORE = 8
+
+
 class DocumentProcessor:
-    def __init__(self, persist_directory="./vectorstore"):
-        self.chunk_size = 1000
-        self.chunk_overlap = 100
+    """Retrieves prompts that previously scored well, to use as few-shot examples."""
+
+    def __init__(self, persist_directory=DEFAULT_PERSIST_DIR):
+        self.persist_directory = persist_directory
         self.embedding_model = UpstageEmbeddings(
             api_key=os.getenv("UPSTAGE_API_KEY"),
-            model="embedding-query"
+            model="embedding-query",
         )
-        self.persist_directory = persist_directory
         self.vectorstore = None
-        
-        # Load existing vectorstore if it exists
         self.load_vectorstore()
 
     def load_vectorstore(self):
-        """Load vectorstore from disk if it exists"""
-        if os.path.exists(self.persist_directory):
-            try:
-                self.vectorstore = FAISS.load_local(
-                    self.persist_directory, 
-                    self.embedding_model,
-                    allow_dangerous_deserialization=True  # Be cautious with this
-                )
-                print(f"Loaded existing vectorstore from {self.persist_directory}")
-            except Exception as e:
-                print(f"Could not load vectorstore: {e}")
-                self.vectorstore = None
-        else:
-            print("No existing vectorstore found. Will create new one.")
+        """Load a persisted index if one exists."""
+        if not os.path.exists(self.persist_directory):
+            return
+        try:
+            self.vectorstore = FAISS.load_local(
+                self.persist_directory,
+                self.embedding_model,
+                # Required by FAISS.load_local; it unpickles the docstore. Safe here
+                # because we only ever load an index this app built itself. The index
+                # is gitignored so no pickle ships to anyone cloning the repo.
+                allow_dangerous_deserialization=True,
+            )
+        except Exception as e:
+            print(f"[rag] could not load vectorstore: {e}")
+            self.vectorstore = None
 
     def save_vectorstore(self):
-        """Save vectorstore to disk"""
         if self.vectorstore is not None:
             self.vectorstore.save_local(self.persist_directory)
-            print(f"Vectorstore saved to {self.persist_directory}")
 
-    def load_document(self, file_path):
-        """Load a document based on its file type"""
-        if file_path.endswith('.pdf'):
-            loader = PyPDFLoader(file_path)
-        #elif file_path.endswith('.csv'):
-            #loader = CSVLoader(file_path)
-        elif file_path.endswith('.csv'):
-            import pandas as pd
-            from langchain.schema import Document
-            
-            # Read CSV
-            df = pd.read_csv(file_path)
-            df = df[pd.to_numeric(df['overall_score'], errors='coerce') > 8]
-            df = df[df['original_user_prompt'] != df['prompt']]
-            
-            if 'prompt' in df.columns:
-                prompts = df['prompt'].dropna()
-            else:
-                prompts = df.iloc[:, 2].dropna()
-            
-            docs = [Document(page_content=str(prompt)) for prompt in prompts]
-            return docs        
-            
-        else:
-            raise ValueError(f"Unsupported file type: {file_path}")
-        
-        return loader.load()
-    
-    def process_document(self, file_path):
-        """Process a document and add it to the vector store"""
-        if self.vectorstore is not None:
-            return 
-        # Load the document
-        docs = self.load_document(file_path)
-        
-        # Split the document into chunks
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.chunk_size, 
-            chunk_overlap=self.chunk_overlap
-        )
-        split_docs = text_splitter.split_documents(docs)
-        self.vectorstore = FAISS.from_documents(split_docs, self.embedding_model)
-        
-        # Save to disk after adding documents
+    @staticmethod
+    def load_successful_prompts(csv_path):
+        """Prompts the loop revised into something that scored above MIN_SCORE."""
+        df = pd.read_csv(csv_path)
+        df = df[pd.to_numeric(df["overall_score"], errors="coerce") > MIN_SCORE]
+        df = df[df["original_user_prompt"] != df["prompt"]]
+        prompts = df["prompt"].dropna().drop_duplicates()
+        return [Document(page_content=str(p)) for p in prompts]
+
+    def process_document(self, csv_path, rebuild=False):
+        """Build the index from a log CSV. Returns True if it (re)built.
+
+        The previous version early-returned whenever an index existed, so every
+        later upload was a silent no-op that still reported success.
+        """
+        if self.vectorstore is not None and not rebuild:
+            return False
+        docs = self.load_successful_prompts(csv_path)
+        if not docs:
+            print(f"[rag] no prompts in {csv_path} scored above {MIN_SCORE}; index not built")
+            return False
+        # No text splitter: these prompts average ~360 characters, so chunking at
+        # 1000 was a no-op that just added a dependency.
+        self.vectorstore = FAISS.from_documents(docs, self.embedding_model)
         self.save_vectorstore()
-            
-    def retrieve_relevant_context(self, query, k=1):
-        """Retrieve relevant document chunks for a query"""
+        print(f"[rag] indexed {len(docs)} successful prompts")
+        return True
+
+    def retrieve_prompts(self, query, k=3):
+        """Top-k similar successful prompts, as plain strings."""
         if self.vectorstore is None:
             return []
-            
-        return self.vectorstore.similarity_search(query, k=k)
+        return [d.page_content.strip() for d in self.vectorstore.similarity_search(query, k=k)]
 
     def reset(self):
-        """Reset the document processor and delete persisted data"""
+        """Drop the index from memory and disk."""
         self.vectorstore = None
         if os.path.exists(self.persist_directory):
-            import shutil
             shutil.rmtree(self.persist_directory)
-            print(f"Deleted vectorstore from {self.persist_directory}")

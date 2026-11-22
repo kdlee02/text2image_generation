@@ -39,8 +39,11 @@ async def index(request: Request):
 from fastapi import Body
 from typing import Dict
 
+# NOT async: this handler does 5 image renders + 5 vision calls with blocking I/O.
+# Declared `async` it would run on the event loop and freeze every other request
+# for the whole run. As a plain `def`, FastAPI runs it in a threadpool.
 @app.post("/api/generate_image")
-async def generate_image(user_input: str = Body(..., embed=True)):
+def generate_image(user_input: str = Body(..., embed=True)):
     response = image_generator_router.generate_image(user_input)
     
     # Check if the response contains an error
@@ -52,11 +55,11 @@ async def generate_image(user_input: str = Body(..., embed=True)):
     return response
 
 @app.get("/api/get_images")
-async def get_images():
+def get_images():
     return image_generator_router.get_images()
 
 @app.get("/api/get_csv_log")
-async def get_csv_log():
+def get_csv_log():
     return image_generator_router.get_csv_log()
 
 import uvicorn

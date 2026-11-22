@@ -6,6 +6,9 @@ import os
 import csv
 from datetime import datetime
 
+# Without a deadline a hung CDN connection blocks the worker thread forever.
+REQUEST_TIMEOUT = 60
+
 class ImageManager:
     def __init__(self):
         self.images = []
@@ -34,7 +37,7 @@ class ImageManager:
         try:
             # Handle Fal AI format (URL-based)
             if isinstance(image_data, dict) and "url" in image_data:
-                response = requests.get(image_data["url"])
+                response = requests.get(image_data["url"], timeout=REQUEST_TIMEOUT)
                 response.raise_for_status()
                 image = Image.open(BytesIO(response.content))
                 buffered = BytesIO()
@@ -76,7 +79,7 @@ class ImageManager:
         try:
             # Download and save the image
             if image_url:
-                response = requests.get(image_url)
+                response = requests.get(image_url, timeout=REQUEST_TIMEOUT)
                 response.raise_for_status()
                 with open(filepath, 'wb') as f:
                     f.write(response.content)

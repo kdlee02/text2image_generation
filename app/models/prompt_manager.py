@@ -1,19 +1,27 @@
+import os
+
+# Resolved from this file's location, not the process working directory.
+# Previously this was the relative path 'data/image_prompt_template.txt', so running
+# the app from anywhere but app/ silently fell back to a leftover "beautiful banner"
+# prompt from an abandoned product: wrong prompt, HTTP 200, no signal.
+TEMPLATE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'data', 'image_prompt_template.txt',
+)
+
+
 class PromptManager:
     """Manages the loading and formatting of the prompt template for consistency."""
-    
+
     @classmethod
-    def load_base_prompt(cls, file_path: str = 'data/image_prompt_template.txt') -> str:
-        """Load the base prompt from a file."""
-        try:
-            with open(file_path, 'r') as f:
-                return f.read()
-        except Exception as e:
-            print(f"Error loading prompt template: {e}")
-            return (
-                "# ROLE\nYou are a professional graphic designer.\n\n"
-                "# THEME\n{user_input}\n\n"
-                "# TASK\nPlease generate a beautiful banner.\n"
-            )
+    def load_base_prompt(cls, file_path: str = TEMPLATE_PATH) -> str:
+        """Load the base prompt from a file.
+
+        Deliberately raises rather than substituting a different prompt. Generating
+        against the wrong prompt silently is worse than failing.
+        """
+        with open(file_path, 'r') as f:
+            return f.read()
 
     @classmethod
     def format_prompt(cls, user_input: str) -> str:
