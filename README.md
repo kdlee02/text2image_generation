@@ -1,142 +1,129 @@
-# Text-to-Image Generation App
+# Self-Correcting Text-to-Image Agent
 
-A FastAPI-based intelligent image generation application that uses DSPy optimization pipeline with LLM evaluation to iteratively improve image generation prompts. The system combines Gemini 2.5 Pro for evaluation and FAL AI Imagen4 for high-quality image generation.
+An image generation agent that critiques its own output and rewrites the prompt until the image matches the request.
+A vision LLM (Gemini 2.5 Pro) grades each image on six checks, and the agent regenerates with a revised prompt until every check passes or five attempts are used.
 
-## Features
+Built with FastAPI, DSPy, Gemini 2.5 Pro and fal.ai Imagen4.
 
-- **DSPy Optimization Pipeline**: Iterative prompt improvement using structured evaluation
-- **Multi-Model Support**: Integration with various AI image generation models
-- **LLM Evaluation**: Gemini 2.5 Pro provides detailed feedback on generated images
-- **RAG-Enhanced Optimization**: Learn from historical successful prompts
-- **Web Interface**: Clean, responsive UI for image generation and history viewing
-- **Comprehensive Logging**: CSV-based tracking of all generations with detailed metrics
+## How it works
 
-## Project Structure
-
-```
-text_to_image_generation/
-├── app/                    # Main FastAPI application
-│   ├── main.py            # FastAPI server entry point
-│   ├── data/              # Configuration and templates
-│   ├── imagesdata/        # Generated images and CSV logs
-│   ├── models/            # Data models and managers
-│   ├── routers/           # API route handlers
-│   ├── services/          # Business logic and DSPy optimization
-│   ├── static/            # CSS and JavaScript files
-│   └── templates/         # HTML templates
-├── modelexperiment/       # Multi-model testing tools
-├── optimization/          # RAG-based prompt optimization
-└── README.md             # This file
+```mermaid
+flowchart LR
+    A[User request] --> B[Generate image<br/>fal.ai Imagen4]
+    B --> C[Evaluate<br/>Gemini 2.5 Pro via DSPy]
+    C -->|all 6 checks pass| D[Return image]
+    C -->|a check fails| E[Revised prompt<br/>+ per-check feedback]
+    E -->|attempt < 5| B
+    E -->|attempt = 5| F[Return best-scoring image]
+    R[(Past successful prompts<br/>FAISS)] -. few-shot examples .-> C
 ```
 
-## App Directory Structure
+1. **Generate** an image from the user's prompt.
+2. **Evaluate** it with a DSPy `Signature`. The LLM returns typed fields (a pass/fail per check, feedback per check, a revised prompt and a 1–10 score), so the stop condition is checked in code.
+3. **Revise.** The previous prompt and its per-check feedback go into the next evaluation, so the same mistake is not repeated.
+4. **Stop** when all six checks pass, or after 5 attempts. In that case the **best-scoring** image is returned, not the last one.
+5. **Log** every attempt (prompt, verdicts, feedback, score) to `app/imagesdata/images_log.csv`.
 
-### Core Application (`app/`)
+### Evaluation checks
 
-- **`main.py`** - FastAPI server with Jinja2 templates and static file serving
-- **`data/`** - Contains prompt templates and configuration files
-- **`imagesdata/`** - Storage for generated images and CSV logs with evaluation data
+| Check | Question the evaluator answers | First-attempt pass rate |
+|---|---|---|
+| Overall intent | Does the image match the overall intent of the request? | 64% |
+| Subject | Is the main subject correct? | 89% |
+| Art type | Is the medium correct (illustration, photo, painting, logo…)? | 89% |
+| Art style | Is the requested style applied (e.g. minimalism)? | 74% |
+| Art movement | Is the requested movement or period applied (e.g. 1940s noir)? | 85% |
+| No conflicts | Is the image free of contradictory elements? | 57% |
 
-### Models (`app/models/`)
-- **`image_manager.py`** - Handles image storage, base64 conversion, and CSV logging
-- **`prompt_manager.py`** - Manages prompt templates and formatting
+The 1–10 score is not part of the pass condition. It is used to pick the best image when no attempt passes, and for analysis.
 
-### Routers (`app/routers/`)
-- **`image_generator_router.py`** - HTTP request routing and error handling for image generation endpoints
+## Results
 
-### Services (`app/services/`)
-- **`dspy_optimization.py`** - Core DSPy optimization pipeline with iterative improvement
-- **`image_generator_service.py`** - Business logic for image generation workflow
+From 74 logged runs (164 images). Verdicts and scores are the evaluator LLM's judgments.
 
-### Frontend (`app/static/` & `app/templates/`)
-- **`templates/image_generator.html`** - Main web interface
-- **`static/style.css`** - Styling for the web interface
-- **`static/script.js`** - Frontend JavaScript for API interactions
+| Metric | Result |
+|---|---|
+| Runs passing all 6 checks | 47% on the first attempt → 80% with the loop |
+| Average score (38 runs that needed revision) | 5.9 first image → 8.7 best image |
+| Average attempts to pass (24 runs passed after revision) | 2.5 |
+| Runs that never passed: returning the best image instead of the last | average score 4.6 → 6.7 |
 
-## Key Technologies
+## Project structure
 
-- **FastAPI** - Modern web framework for building APIs
-- **DSPy** - Framework for optimizing language model pipelines
-- **FAL AI** - Image generation service (Imagen4)
-- **Google Gemini 2.5 Pro** - LLM for image evaluation and feedback
-- **FAISS** - Vector database for similarity search
-- **Upstage** - Language model for RAG optimization
+```
+text2image_generation/
+├── app/
+│   ├── main.py                     # FastAPI entry point
+│   ├── routers/                    # HTTP handlers
+│   ├── services/dspy_optimization.py  # Generate → evaluate → revise loop
+│   ├── models/                     # Image storage, CSV logging, prompt template
+│   ├── data/                       # Prompt template
+│   ├── imagesdata/images_log.csv   # Log of every attempt
+│   ├── templates/, static/         # Web UI
+├── rag/                            # Few-shot retrieval of past successful prompts
+├── modelexperiment/                # Same prompt across 5 image models
+├── test_pipeline.py                # Offline tests (no network, no API keys)
+└── requirements.txt
+```
 
-## Installation & Setup
+## Setup
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd text_to_image_generation
-   ```
+```bash
+git clone https://github.com/kdlee02/text2image_generation.git
+cd text2image_generation
+uv venv && uv pip install -r requirements.txt
+```
 
-2. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+Create a `.env` file in the repo root (it is gitignored):
 
-3. **Configure environment variables**
-   Create a `.env` file with:
-   ```
-   FAL_KEY=your_fal_ai_api_key
-   GOOGLE_API_KEY=your_gemini_api_key
-   UPSTAGE_API_KEY=your_upstage_api_key
-   ```
+```
+GEMINI_API_KEY=...    # evaluator
+FAL_KEY=...           # image generation
+UPSTAGE_API_KEY=...   # optional: embeddings for RAG few-shot retrieval
+```
 
-4. **Run the application**
-   ```bash
-   cd app
-   python main.py
-   ```
+Without `UPSTAGE_API_KEY` the retrieval step is skipped and generation still works.
 
-5. **Access the web interface**
-   Open `http://localhost:8000` in your browser
+## Run
 
-## Usage
+```bash
+cd app
+uv run python main.py
+```
 
-### Web Interface
-1. Enter your image description in the text input
-2. Click "Generate Image" to start the DSPy optimization process
-3. View the iterative improvements and final result
-4. Browse generation history and evaluation metrics
+Open http://localhost:8000.
 
-### API Endpoints
-- `POST /api/generate_image` - Generate image with DSPy optimization
-- `GET /api/get_images` - Retrieve image generation history
-- `GET /api/get_csv_log` - Download CSV log of all generations
+| Endpoint | Description |
+|---|---|
+| `POST /api/generate_image` | Body `{"user_input": "..."}`. Runs the loop and returns a base64 JPEG |
+| `GET /api/get_images` | Generation history |
+| `GET /api/get_csv_log` | Full CSV log |
 
-## DSPy Optimization Process
+## RAG few-shot retrieval (`rag/`)
 
-1. **Initial Generation** - Create image from user prompt
-2. **LLM Evaluation** - Gemini 2.5 Pro evaluates image quality across multiple dimensions
-3. **Feedback Analysis** - Identify areas for improvement
-4. **Prompt Refinement** - Generate improved prompt based on feedback
-5. **Iteration** - Repeat up to 5 times until optimal result
+Prompts from the log that scored above 8 **after being revised** by the loop are indexed in FAISS (Upstage embeddings).
+For each new request, the 3 most similar are passed to the evaluator as examples of good revisions.
 
-### Evaluation Criteria
-- Subject accuracy and presence
-- Art type/medium matching
-- Art style consistency
-- Art movement alignment
-- Conflict detection
-- Overall quality score (1-10)
+- The index is built once per process from the current log. Delete `rag/vectorstore/` to force a rebuild.
+- Retrieval is best-effort. A missing key or empty index means no examples, never a failed generation.
 
-## Additional Tools
+Details: [rag/README.md](rag/README.md)
 
-### Model Experiments (`modelexperiment/`)
-Test and compare different AI image generation models with the same prompts. See [modelexperiment/README.md](modelexperiment/README.md) for details.
+## Model comparison (`modelexperiment/`)
 
-### RAG Optimization (`optimization/`)
-Enhance prompt generation using historical data and few-shot learning. See [optimization/README.md](optimization/README.md) for details.
+A CLI that sends the same prompt to Imagen4, Dreamina v3.1, Seedream v4, FLUX Pro v1.1 Ultra and Ideogram v3 through fal.ai and saves the outputs with generation times. Imagen4 was chosen as the default from this comparison.
 
-## Contributing
+Details: [modelexperiment/README.md](modelexperiment/README.md)
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+## Tests
 
-## License
+```bash
+uv run pytest test_pipeline.py
+```
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+Offline and free. API calls are mocked. Covers best-image selection, unparseable scores, RAG failure fallback and the retrieval filter.
+
+## Limitations
+
+- **The evaluator is also the grader.** Pass rates and scores come from the same LLM that writes the revised prompt, and have not been checked against human ratings.
+- **One generation model.** Imagen4 is fixed; routing by request type is not implemented.

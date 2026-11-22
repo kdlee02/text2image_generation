@@ -1,82 +1,50 @@
-# Optimization
+# RAG Few-Shot Retrieval
 
-This directory contains RAG (Retrieval-Augmented Generation) tools for optimizing image generation prompts using historical data and few-shot learning techniques.
+Supplies the DSPy evaluator with examples of prompts that previously worked, so its
+`revised_prompt` output is guided by what has actually scored well before.
 
 ## Files
 
-- `main.py` - Main script that demonstrates RAG-enhanced prompt optimization
-- `rag_chatbot.py` - Core RAG chatbot implementation
-- `chat_engine.py` - Chat interface using Upstage Solar Pro2 model
-- `document_processor.py` - Document processing and vector storage management
-- `vectorstore/` - FAISS vector database for storing processed documents
+- `document_processor.py` — the whole module: builds the FAISS index and retrieves from it
+- `main.py` — CLI to eyeball what the app would retrieve for a given prompt
+- `vectorstore/` — FAISS index, gitignored and rebuilt on demand
 
-## Overview
+## What gets indexed
 
-The optimization module uses RAG to improve image generation prompts by learning from successful examples in the historical data. It processes CSV logs from previous image generations and creates a knowledge base of high-quality prompts.
+Rows from `app/imagesdata/images_log.csv` where **both** hold:
 
-## Key Features
+- `overall_score > 8`
+- `original_user_prompt != prompt` — the loop actually rewrote it
 
-### RAG Chatbot
-- Processes historical image generation logs (CSV files)
-- Creates vector embeddings for prompt similarity search
-- Retrieves relevant successful prompts for few-shot learning
-- Filters for high-quality examples (score > 8)
-
-### Document Processing
-- Supports CSV and PDF document loading
-- Automatic text chunking and embedding generation
-- FAISS vector store for efficient similarity search
-- Persistent storage for processed documents
-
-### Chat Engine
-- Integration with Upstage Solar Pro2 language model
-- Context-aware prompt enhancement
-- Conversation history tracking
+That second filter is the point: an unrevised prompt that scored well says nothing about
+how to revise. As of the committed log this yields 34 unique prompts.
 
 ## Usage
 
-### Basic Setup
+The app calls this automatically. To inspect it directly:
 
-1. Configure API keys in the respective files:
-   - Upstage API key in `chat_engine.py`
-   - Upstage API key in `document_processor.py`
-
-2. Run the main optimization script:
-   ```bash
-   python main.py
-   ```
-
-### RAG Chatbot Usage
-
-```python
-from rag_chatbot import RAGChatbot
-
-# Initialize chatbot
-chatbot = RAGChatbot()
-
-# Upload historical data
-chatbot.upload_document('path/to/images_log.csv')
-
-# Query for similar prompts
-response = chatbot.send_message("water lily")
-
-# Reset if needed
-chatbot.reset_all()
+```bash
+cd rag
+python main.py
 ```
 
-### Document Processing
+## Integration
 
-The system automatically:
-- Filters CSV data for high-quality examples (overall_score > 8)
-- Excludes unchanged prompts (original_user_prompt != prompt)
-- Creates embeddings for similarity search
-- Saves processed data to `vectorstore/`
+`app/services/dspy_optimization.py` retrieves once per request, keyed on the user's raw
+input, and passes the result to every iteration via the `few_shot_examples` field of
+`ImageEvaluationSignature`.
 
-## Integration with Main App
+**Retrieval is best-effort by design.** Missing `UPSTAGE_API_KEY`, an unbuilt index, or an
+empty corpus all degrade to no examples and log a line. RAG never fails a generation.
 
-This optimization module enhances the main image generation pipeline by:
-- Providing few-shot examples for DSPy prompt optimization
-- Learning from successful prompt iterations
-- Improving prompt quality through historical knowledge
+## Index lifecycle
 
-The enhanced prompts are integrated into the main DSPy evaluation signature to improve image generation results.
+Built once per process from the log as it stands at first use, then reused. Rows written
+during a run are indexed on the next restart. `process_document(csv, rebuild=True)` forces
+a rebuild, as does deleting `vectorstore/`.
+
+## Notes
+
+- No text splitter — these prompts average ~360 characters, so chunking at 1000 was a no-op.
+- `langchain-community` (used for the FAISS wrapper) is being sunset upstream. Pinned and
+  working, but it will need migrating eventually.
